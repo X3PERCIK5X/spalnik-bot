@@ -462,9 +462,20 @@ def main() -> None:
     # error handler
     app.add_error_handler(error_handler)
 
-    logger.info("🤖 Бот запущен")
-    app.run_polling()
+    logger.info("🤖 Бот запущен (WEBHOOK)")
 
+PORT = int(os.environ.get("PORT", "10000"))
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
+
+if not WEBHOOK_URL:
+    raise RuntimeError("❌ Не задан WEBHOOK_URL в переменных окружения Render")
+
+    app.run_webhook(
+    listen="0.0.0.0",
+    port=PORT,
+    url_path="webhook",
+    webhook_url=f"{WEBHOOK_URL}/webhook",
+)
 
 if __name__ == "__main__":
     main()
