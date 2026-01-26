@@ -367,76 +367,73 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 # ==========================================================
-# 10.5) MINI APP: прием заказа и отправка в чат
 # ==========================================================
-async def webapp_order_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Ловит данные из Telegram Mini App (tg.sendData),
-    и отправляет заказ в чат(ы) из NOTIFY_CHAT_IDS.
-    """
+# MINI APP → ПРИЁМ ПРЕДЗАКАЗА
+# ==========================================================
+import json
+
+async def webapp_order_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.web_app_data:
         return
 
-    raw = update.message.web_app_data.data  # строка JSON из mini app
+    raw = update.message.web_app_data.data
+    logger.info("📦 MINIAPP RAW DATA: %s", raw)
 
     try:
         data = json.loads(raw)
     except Exception as e:
-        logger.warning("MiniApp JSON parse error: %s | raw=%s", e, raw)
-        await update.message.reply_text("Ошибка: не удалось прочитать заказ. Попробуйте ещё раз.")
+        logger.exception("❌ JSON error")
+        await update.message.reply_text("❌ Ошибка чтения заказа.")
         return
 
-    # ожидаем формат из твоего cart.js:
-    # { type, phone, desired_time, comment, total, items: [ {id,name,price,qty,sum}, ... ] }
-    phone = (data.get("phone") or "").strip() or "не указан"
-    desired_time = (data.get("desired_time") or "").strip() or "не указано"
-    comment = (data.get("comment") or "").strip()
-    total = data.get("total", 0)
-
-    items = data.get("items", [])
-    if not isinstance(items, list) or len(items) == 0:
-        await update.message.reply_text("Корзина пустая — заказ не отправлен.")
+    if data.get("type") != "preorder":
+        await update.message.reply_text("⚠️ Это не предзаказ.")
         return
 
-    # кто оформил
     user = update.effective_user
-    who = ""
-    if user and user.username:
-        who = f"@{user.username}"
-    elif user:
-        who = user.full_name
-    else:
-        who = "гость"
+    who = user.username if user and user.username else user.full_name if user else "Неизвестно"
+
+    phone = data.get("phone", "-")
+    desired_time = data.get("desired_time", "-")
+    comment = data.get("comment", "")
+    total = data.get("total", 0)
+    items = data.get("items", [])
 
     lines = []
     for it in items:
-        name = it.get("name", "Позиция")
-        qty = it.get("qty", 1)
-        price = it.get("price", 0)
-        sum_ = it.get("sum", 0)
-        lines.append(f"• {name} × {qty} = {sum_} ₽ (цена {price} ₽)")
+        lines.append(f"• {it['name']} × {it['qty']} = {it['sum']} ₽")
 
     text = (
-        "🛎 *НОВЫЙ ПРЕДЗАКАЗ*\n\n"
+        "🛒 *НОВЫЙ ПРЕДЗАКАЗ (Mini App)*\n\n"
         f"👤 От: *{who}*\n"
         f"📞 Телефон: *{phone}*\n"
-        f"⏰ Время: *{desired_time}*\n"
-        f"💰 Итого: *{total} ₽*\n\n"
-        "*Состав заказа:*\n"
-        + "\n".join(lines)
+        f"⏰ Время: *{desired_time}*\n\n"
+        + "\n".join(lines) +
+        f"\n\n💰 *Итого:* {total} ₽"
     )
 
     if comment:
-        text += f"\n\nКомментарий: _{comment}_"
+        text += f"\n\n💬 Комментарий: _{comment}_"
 
-    # Отправляем в чат(ы) предзаказов (ты уже используешь NOTIFY_CHAT_IDS)
-    await notify_staff(context, text)
+    sent = 0
+    for cid in NOTIFY_CHAT_IDS:
+        try:
+            await context.bot.send_message(
+                chat_id=cid,
+                text=text,
+                parse_mode=ParseMode.MARKDOWN
+            )
+            sent += 1
+        except Exception as e:
+            logger.exception("❌ Не отправилось в чат %s", cid)
 
-    # Ответ пользователю
-    await update.message.reply_text(
-        "✅ Предзаказ отправлен! Мы скоро свяжемся для подтверждения.",
-    )
-
+    if sent > 0:
+        await update.message.reply_text("✅ Предзаказ принят! Мы скоро свяжемся.")
+    else:
+        await update.message.reply_text(
+            "❌ Заказ принят ботом, но НЕ отправился в группу.\n"
+            "Проверь, что бот добавлен в группу и chat_id верный."
+        )
 
 # ==========================================================
 # 11) MAIN
@@ -478,7 +475,10 @@ def main() -> None:
     app.add_error_handler(error_handler)
 
     # mini app orders
-    app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, webapp_order_handler))
+    app.add_handler(
+    MessageHandler(filters.StatusUpdate.WEB_APP_DATA, webapp_order_handler)
+)
+
 
 
     logger.info("🤖 Бот запущен")
