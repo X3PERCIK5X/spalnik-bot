@@ -6,8 +6,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import html
 from pathlib import Path
-from typing import List
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
@@ -72,7 +72,7 @@ if not TOKEN:
 
 
 # ==========================================================
-# 3) LINKS + NOTIFICATIONS 
+# 3) LINKS + NOTIFICATIONS
 # ==========================================================
 YANDEX_REVIEWS_URL = "https://yandex.ru/maps/org/spalnik/104151350821/reviews/?ll=37.715866%2C55.532722&z=16"
 GIS2_REVIEWS_URL = "https://2gis.ru/moscow/firm/70000001053915498"
@@ -81,7 +81,13 @@ TG_CHANNEL_URL = "https://t.me/SpalnikBar"
 
 TIP_URL = ""  # если пусто — будет “скоро здесь можно будет оставить чаевые”
 
-NOTIFY_CHAT_IDS: list[int] = [-5102802574]
+# !!! ВАЖНО !!!
+# Сюда должен быть добавлен chat_id ГРУППЫ заказов.
+# Обычно он выглядит так: -1002345678901
+NOTIFY_CHAT_IDS: list[int] = [
+    -5102802574,  # <-- замени на chat_id группы заказов (лучше -100...)
+]
+
 
 # ==========================================================
 # 4) BOOKING STATES
@@ -92,7 +98,7 @@ B_DATE, B_TIME, B_GUESTS, B_NAME, B_PHONE, B_COMMENT = range(6)
 # ==========================================================
 # 5) UI
 # ==========================================================
-HOME_TEXT = "🍻 *Спальник Бар*\n\nВыбирай действие 👇"
+HOME_TEXT = "🍻 <b>Спальник Бар</b>\n\nВыбирай действие 👇"
 
 
 def main_keyboard() -> InlineKeyboardMarkup:
@@ -133,7 +139,6 @@ def back_home_kb() -> InlineKeyboardMarkup:
 async def show_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
 
-    # удаляем прошлое “главное меню” (если было)
     old_home = context.chat_data.get("home_message_id")
     if isinstance(old_home, int):
         try:
@@ -141,39 +146,50 @@ async def show_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception:
             pass
 
-    # отправляем главное меню (всегда с лого, если есть)
     if LOGO_PATH.exists():
         with LOGO_PATH.open("rb") as f:
             msg = await context.bot.send_photo(
                 chat_id=chat_id,
                 photo=f,
                 caption=HOME_TEXT,
-                parse_mode=ParseMode.MARKDOWN,
+                parse_mode=ParseMode.HTML,
                 reply_markup=main_keyboard(),
             )
     else:
         msg = await context.bot.send_message(
             chat_id=chat_id,
             text=HOME_TEXT,
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.HTML,
             reply_markup=main_keyboard(),
         )
 
     context.chat_data["home_message_id"] = msg.message_id
 
-    # пытаемся закрепить (если бот админ)
+    # закрепление (если бот админ)
     try:
         await context.bot.pin_chat_message(chat_id=chat_id, message_id=msg.message_id, disable_notification=True)
     except Exception:
         pass
 
 
-async def notify_staff(context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+async def notify_staff(context: ContextTypes.DEFAULT_TYPE, text_html: str) -> tuple[int, list[str]]:
+    """Шлём в группы. Возвращаем (сколько отправили, список ошибок)."""
+    sent = 0
+    errors: list[str] = []
     for cid in NOTIFY_CHAT_IDS:
         try:
-            await context.bot.send_message(chat_id=cid, text=text, parse_mode=ParseMode.MARKDOWN)
+            await context.bot.send_message(
+                chat_id=cid,
+                text=text_html,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+            sent += 1
         except Exception as e:
-            logger.warning("Notify failed to %s: %s", cid, e)
+            err = f"chat_id={cid}: {type(e).__name__}: {e}"
+            errors.append(err)
+            logger.exception("❌ Не отправилось в чат %s", cid)
+    return sent, errors
 
 
 # ==========================================================
@@ -184,7 +200,8 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def chatid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(f"chat_id этого чата: {update.effective_chat.id}")
+    if update.message:
+        await update.message.reply_text(f"chat_id этого чата: {update.effective_chat.id}")
 
 
 # ==========================================================
@@ -192,7 +209,6 @@ async def chatid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 # ==========================================================
 async def go_home_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.callback_query.answer()
-    # если человек был в брони — сбрасываем бронь
     for k in ["b_date", "b_time", "b_guests", "b_name", "b_phone"]:
         context.user_data.pop(k, None)
     await show_home(update, context)
@@ -280,8 +296,6 @@ async def b_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def b_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # ВАЖНО: если тут была ошибка — раньше бот молчал.
-    # Теперь любые ошибки ловятся error_handler() ниже.
     comment = update.message.text.strip()
     if comment == "-":
         comment = ""
@@ -300,43 +314,43 @@ async def b_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     )
 
     msg_user = (
-        "✅ *Бронь принята!*\n\n"
-        f"Номер: *#{booking_id}*\n"
-        f"Дата: *{context.user_data.get('b_date')}*\n"
-        f"Время: *{context.user_data.get('b_time')}*\n"
-        f"Гостей: *{context.user_data.get('b_guests')}*\n"
-        f"Имя: *{context.user_data.get('b_name')}*\n"
-        f"Телефон: *{context.user_data.get('b_phone')}*\n"
+        f"✅ <b>Бронь принята!</b>\n\n"
+        f"Номер: <b>#{booking_id}</b>\n"
+        f"Дата: <b>{html.escape(str(context.user_data.get('b_date')))}</b>\n"
+        f"Время: <b>{html.escape(str(context.user_data.get('b_time')))}</b>\n"
+        f"Гостей: <b>{html.escape(str(context.user_data.get('b_guests')))}</b>\n"
+        f"Имя: <b>{html.escape(str(context.user_data.get('b_name')))}</b>\n"
+        f"Телефон: <b>{html.escape(str(context.user_data.get('b_phone')))}</b>\n"
     )
     if comment:
-        msg_user += f"Комментарий: _{comment}_\n"
+        msg_user += f"Комментарий: <i>{html.escape(comment)}</i>\n"
 
-    await update.message.reply_text(msg_user, parse_mode=ParseMode.MARKDOWN, reply_markup=back_home_kb())
+    await update.message.reply_text(msg_user, parse_mode=ParseMode.HTML, reply_markup=back_home_kb())
 
     # уведомление персоналу
-    if NOTIFY_CHAT_IDS:
-        who = ""
-        if user and user.username:
-            who = f"\nОт: @{user.username}"
-        elif user:
-            who = f"\nОт: {user.full_name}"
+    who = ""
+    if user and user.username:
+        who = f"@{user.username}"
+    elif user:
+        who = user.full_name
+    else:
+        who = "Неизвестно"
 
-        msg_staff = (
-            "📌 *Новая бронь*\n\n"
-            f"Заявка: *#{booking_id}*\n"
-            f"Дата: *{context.user_data.get('b_date')}*\n"
-            f"Время: *{context.user_data.get('b_time')}*\n"
-            f"Гостей: *{context.user_data.get('b_guests')}*\n"
-            f"Имя: *{context.user_data.get('b_name')}*\n"
-            f"Телефон: *{context.user_data.get('b_phone')}*"
-            f"{who}"
-        )
-        if comment:
-            msg_staff += f"\nКомментарий: _{comment}_"
+    msg_staff = (
+        f"📌 <b>Новая бронь</b>\n\n"
+        f"Заявка: <b>#{booking_id}</b>\n"
+        f"Дата: <b>{html.escape(str(context.user_data.get('b_date')))}</b>\n"
+        f"Время: <b>{html.escape(str(context.user_data.get('b_time')))}</b>\n"
+        f"Гостей: <b>{html.escape(str(context.user_data.get('b_guests')))}</b>\n"
+        f"Имя: <b>{html.escape(str(context.user_data.get('b_name')))}</b>\n"
+        f"Телефон: <b>{html.escape(str(context.user_data.get('b_phone')))}</b>\n"
+        f"От: <b>{html.escape(who)}</b>"
+    )
+    if comment:
+        msg_staff += f"\nКомментарий: <i>{html.escape(comment)}</i>"
 
-        await notify_staff(context, msg_staff)
+    await notify_staff(context, msg_staff)
 
-    # очистка
     for k in ["b_date", "b_time", "b_guests", "b_name", "b_phone"]:
         context.user_data.pop(k, None)
 
@@ -351,98 +365,119 @@ async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 # ==========================================================
-# 10) GLOBAL ERROR HANDLER (чтобы не было “молча”)
+# 10) MINI APP → ПРИЁМ ПРЕДЗАКАЗА
+# ==========================================================
+async def webapp_order_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Ловит update.message.web_app_data (Mini App sendData()) и шлёт в группу заказов.
+    """
+
+    # 1) Забираем raw максимально надёжно (Telegram иногда по-разному кладёт message)
+    raw = None
+    if update.message and update.message.web_app_data:
+        raw = update.message.web_app_data.data
+    elif update.effective_message and update.effective_message.web_app_data:
+        raw = update.effective_message.web_app_data.data
+
+    if not raw:
+        return
+
+    logger.info("📦 MINIAPP RAW DATA: %s", raw)
+
+    # 2) Парсим JSON
+    try:
+        data = json.loads(raw)
+    except Exception as e:
+        logger.exception("❌ JSON parse error: %s", e)
+        if update.effective_message:
+            await update.effective_message.reply_text("❌ Ошибка чтения заказа.")
+        return
+
+    if data.get("type") != "preorder":
+        if update.effective_message:
+            await update.effective_message.reply_text("⚠️ Это не предзаказ.")
+        return
+
+    # 3) Собираем текст заказа
+    user = update.effective_user
+    who = ""
+    if user and user.username:
+        who = f"@{user.username}"
+    elif user:
+        who = user.full_name
+    else:
+        who = "Неизвестно"
+
+    phone = str(data.get("phone", "-"))
+    desired_time = str(data.get("desired_time", "-"))
+    comment = str(data.get("comment", "") or "")
+    total = data.get("total", 0)
+    items = data.get("items", []) or []
+
+    lines = []
+    for it in items:
+        try:
+            name = html.escape(str(it.get("name", "")))
+            qty = html.escape(str(it.get("qty", "")))
+            s = html.escape(str(it.get("sum", "")))
+            lines.append(f"• {name} × {qty} = {s} ₽")
+        except Exception:
+            continue
+
+    if not lines:
+        lines = ["• (пусто)"]
+
+    text_html = (
+        "🛒 <b>НОВЫЙ ПРЕДЗАКАЗ (Mini App)</b>\n\n"
+        f"👤 От: <b>{html.escape(who)}</b>\n"
+        f"📞 Телефон: <b>{html.escape(phone)}</b>\n"
+        f"⏰ Время: <b>{html.escape(desired_time)}</b>\n\n"
+        + "\n".join(lines) +
+        f"\n\n💰 <b>Итого:</b> {html.escape(str(total))} ₽"
+    )
+
+    if comment.strip():
+        text_html += f"\n\n💬 Комментарий: <i>{html.escape(comment.strip())}</i>"
+
+    # 4) Шлём в группы
+    sent, errors = await notify_staff(context, text_html)
+
+    # 5) Ответ пользователю
+    if update.effective_message:
+        if sent > 0:
+            await update.effective_message.reply_text("✅ Предзаказ принят! Мы скоро свяжемся.")
+        else:
+            # максимально полезно — показать причину
+            err_text = "\n".join(errors[:2]) if errors else "неизвестная ошибка"
+            await update.effective_message.reply_text(
+                "❌ Заказ дошёл до бота, но НЕ отправился в группу.\n\n"
+                "Проверь:\n"
+                "1) бот добавлен в группу заказов\n"
+                "2) бот может писать в группе (лучше сделать админом)\n"
+                "3) chat_id группы правильный (обычно -100...)\n\n"
+                f"Ошибка: {err_text}"
+            )
+
+
+# ==========================================================
+# 11) GLOBAL ERROR HANDLER
 # ==========================================================
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.exception("Unhandled error: %s", context.error)
-
     try:
-        if isinstance(update, Update):
-            # куда ответить пользователю
-            msg_target = update.effective_message
-            if msg_target:
-                await msg_target.reply_text("Бронь не работает, позвоните нам.")
+        if isinstance(update, Update) and update.effective_message:
+            await update.effective_message.reply_text("⚠️ Ошибка. Попробуй ещё раз или напиши администратору.")
     except Exception:
         pass
 
 
 # ==========================================================
-# ==========================================================
-# MINI APP → ПРИЁМ ПРЕДЗАКАЗА
-# ==========================================================
-import json
-
-async def webapp_order_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.web_app_data:
-        return
-
-    raw = update.message.web_app_data.data
-    logger.info("📦 MINIAPP RAW DATA: %s", raw)
-
-    try:
-        data = json.loads(raw)
-    except Exception as e:
-        logger.exception("❌ JSON error")
-        await update.message.reply_text("❌ Ошибка чтения заказа.")
-        return
-
-    if data.get("type") != "preorder":
-        await update.message.reply_text("⚠️ Это не предзаказ.")
-        return
-
-    user = update.effective_user
-    who = user.username if user and user.username else user.full_name if user else "Неизвестно"
-
-    phone = data.get("phone", "-")
-    desired_time = data.get("desired_time", "-")
-    comment = data.get("comment", "")
-    total = data.get("total", 0)
-    items = data.get("items", [])
-
-    lines = []
-    for it in items:
-        lines.append(f"• {it['name']} × {it['qty']} = {it['sum']} ₽")
-
-    text = (
-        "🛒 *НОВЫЙ ПРЕДЗАКАЗ (Mini App)*\n\n"
-        f"👤 От: *{who}*\n"
-        f"📞 Телефон: *{phone}*\n"
-        f"⏰ Время: *{desired_time}*\n\n"
-        + "\n".join(lines) +
-        f"\n\n💰 *Итого:* {total} ₽"
-    )
-
-    if comment:
-        text += f"\n\n💬 Комментарий: _{comment}_"
-
-    sent = 0
-    for cid in NOTIFY_CHAT_IDS:
-        try:
-            await context.bot.send_message(
-                chat_id=cid,
-                text=text,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            sent += 1
-        except Exception as e:
-            logger.exception("❌ Не отправилось в чат %s", cid)
-
-    if sent > 0:
-        await update.message.reply_text("✅ Предзаказ принят! Мы скоро свяжемся.")
-    else:
-        await update.message.reply_text(
-            "❌ Заказ принят ботом, но НЕ отправился в группу.\n"
-            "Проверь, что бот добавлен в группу и chat_id верный."
-        )
-
-# ==========================================================
-# 11) MAIN
+# 12) MAIN
 # ==========================================================
 def main() -> None:
     init_db(str(BASE_DIR / "schema.sql"))
 
     app = ApplicationBuilder().token(TOKEN).build()
-
 
     # commands
     app.add_handler(CommandHandler("start", start_cmd))
@@ -471,18 +506,14 @@ def main() -> None:
     )
     app.add_handler(booking_conv)
 
+    # mini app orders (ОБЯЗАТЕЛЬНО)
+    app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, webapp_order_handler))
+
     # error handler
     app.add_error_handler(error_handler)
 
-    # mini app orders
-    app.add_handler(
-    MessageHandler(filters.StatusUpdate.WEB_APP_DATA, webapp_order_handler)
-)
-
-
-
-    logger.info("🤖 Бот запущен")
-    app.run_polling()
+    logger.info("🤖 Бот запущен (polling)")
+    app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
