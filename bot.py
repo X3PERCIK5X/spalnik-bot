@@ -6,10 +6,14 @@ from __future__ import annotations
 import json
 import logging
 import os
-import html
 from pathlib import Path
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    WebAppInfo,
+)
 from telegram.constants import ParseMode
 from telegram.ext import (
     ApplicationBuilder,
@@ -70,6 +74,11 @@ if not TOKEN:
         "BOT_TOKEN=123456:ABCDEF...\n"
     )
 
+# Ссылка на мини-апп (ОБЯЗАТЕЛЬНО HTTPS)
+WEBAPP_URL = os.getenv("WEBAPP_URL", "").strip()
+if not WEBAPP_URL:
+    logger.warning("⚠️ WEBAPP_URL пустой. Кнопка мини-аппа не появится.")
+
 
 # ==========================================================
 # 3) LINKS + NOTIFICATIONS
@@ -81,12 +90,8 @@ TG_CHANNEL_URL = "https://t.me/SpalnikBar"
 
 TIP_URL = ""  # если пусто — будет “скоро здесь можно будет оставить чаевые”
 
-# !!! ВАЖНО !!!
-# Сюда должен быть добавлен chat_id ГРУППЫ заказов.
-# Обычно он выглядит так: -1002345678901
-NOTIFY_CHAT_IDS: list[int] = [
-    -5102802574,  # <-- замени на chat_id группы заказов (лучше -100...)
-]
+# ВАЖНО: сюда chat_id группы заказов
+NOTIFY_CHAT_IDS: list[int] = [-5102802574]
 
 
 # ==========================================================
@@ -98,7 +103,7 @@ B_DATE, B_TIME, B_GUESTS, B_NAME, B_PHONE, B_COMMENT = range(6)
 # ==========================================================
 # 5) UI
 # ==========================================================
-HOME_TEXT = "🍻 <b>Спальник Бар</b>\n\nВыбирай действие 👇"
+HOME_TEXT = "🍻 *Спальник Бар*\n\nВыбирай действие 👇"
 
 
 def main_keyboard() -> InlineKeyboardMarkup:
@@ -107,26 +112,34 @@ def main_keyboard() -> InlineKeyboardMarkup:
         if TIP_URL
         else InlineKeyboardButton("💜 Чаевые", callback_data="tips")
     )
-    return InlineKeyboardMarkup(
+
+    rows = [
         [
-            [
-                InlineKeyboardButton("📋 Меню (PDF)", callback_data="open_menu"),
-                InlineKeyboardButton("🎉 События", callback_data="open_events"),
-            ],
-            [
-                InlineKeyboardButton("⭐ (Яндекс)", url=YANDEX_REVIEWS_URL),
-                InlineKeyboardButton("⭐ (2ГИС)", url=GIS2_REVIEWS_URL),
-            ],
-            [
-                InlineKeyboardButton("📣 Наш канал", url=TG_CHANNEL_URL),
-                InlineKeyboardButton("🛵 Яндекс Еда", url=YANDEX_FOOD_URL),
-            ],
-            [
-                InlineKeyboardButton("📅 Бронь столов", callback_data="book_start"),
-                tips_btn,
-            ],
-        ]
-    )
+            InlineKeyboardButton("📋 Меню (PDF)", callback_data="open_menu"),
+            InlineKeyboardButton("🎉 События", callback_data="open_events"),
+        ],
+        [
+            InlineKeyboardButton("⭐ (Яндекс)", url=YANDEX_REVIEWS_URL),
+            InlineKeyboardButton("⭐ (2ГИС)", url=GIS2_REVIEWS_URL),
+        ],
+        [
+            InlineKeyboardButton("📣 Наш канал", url=TG_CHANNEL_URL),
+            InlineKeyboardButton("🛵 Яндекс Еда", url=YANDEX_FOOD_URL),
+        ],
+        [
+            InlineKeyboardButton("📅 Бронь столов", callback_data="book_start"),
+            tips_btn,
+        ],
+    ]
+
+    # ✅ ВАЖНО: мини-апп должен открываться как WebApp, иначе web_app_data не придёт
+    if WEBAPP_URL:
+        rows.insert(
+            0,
+            [InlineKeyboardButton("🛒 Меню / Предзаказ (Mini App)", web_app=WebAppInfo(url=WEBAPP_URL))],
+        )
+
+    return InlineKeyboardMarkup(rows)
 
 
 def back_home_kb() -> InlineKeyboardMarkup:
@@ -134,7 +147,7 @@ def back_home_kb() -> InlineKeyboardMarkup:
 
 
 # ==========================================================
-# 6) HELPERS: pinned home + cleanup previous home message
+# 6) HELPERS
 # ==========================================================
 async def show_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
@@ -152,44 +165,36 @@ async def show_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 chat_id=chat_id,
                 photo=f,
                 caption=HOME_TEXT,
-                parse_mode=ParseMode.HTML,
+                parse_mode=ParseMode.MARKDOWN,
                 reply_markup=main_keyboard(),
             )
     else:
         msg = await context.bot.send_message(
             chat_id=chat_id,
             text=HOME_TEXT,
-            parse_mode=ParseMode.HTML,
+            parse_mode=ParseMode.MARKDOWN,
             reply_markup=main_keyboard(),
         )
 
     context.chat_data["home_message_id"] = msg.message_id
 
-    # закрепление (если бот админ)
     try:
         await context.bot.pin_chat_message(chat_id=chat_id, message_id=msg.message_id, disable_notification=True)
     except Exception:
         pass
 
 
-async def notify_staff(context: ContextTypes.DEFAULT_TYPE, text_html: str) -> tuple[int, list[str]]:
-    """Шлём в группы. Возвращаем (сколько отправили, список ошибок)."""
-    sent = 0
-    errors: list[str] = []
+async def notify_staff(context: ContextTypes.DEFAULT_TYPE, text: str) -> int:
+    """Шлёт в группу(ы). Возвращает сколько чатов успешно отправлено."""
+    ok = 0
     for cid in NOTIFY_CHAT_IDS:
         try:
-            await context.bot.send_message(
-                chat_id=cid,
-                text=text_html,
-                parse_mode=ParseMode.HTML,
-                disable_web_page_preview=True,
-            )
-            sent += 1
+            # ⚠️ без ParseMode, чтобы спецсимволы не ломали отправку
+            await context.bot.send_message(chat_id=cid, text=text)
+            ok += 1
         except Exception as e:
-            err = f"chat_id={cid}: {type(e).__name__}: {e}"
-            errors.append(err)
-            logger.exception("❌ Не отправилось в чат %s", cid)
-    return sent, errors
+            logger.exception("❌ Не смог отправить в чат %s: %s", cid, e)
+    return ok
 
 
 # ==========================================================
@@ -200,8 +205,13 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def chatid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.message:
-        await update.message.reply_text(f"chat_id этого чата: {update.effective_chat.id}")
+    await update.message.reply_text(f"chat_id этого чата: {update.effective_chat.id}")
+
+
+async def testnotify_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Проверка: может ли бот писать в группу заказов."""
+    ok = await notify_staff(context, "✅ Тест: бот умеет отправлять сообщения в группу заказов.")
+    await update.message.reply_text(f"Результат: отправлено в {ok} чат(ов) из {len(NOTIFY_CHAT_IDS)}.")
 
 
 # ==========================================================
@@ -313,43 +323,22 @@ async def b_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         comment=comment,
     )
 
-    msg_user = (
-        f"✅ <b>Бронь принята!</b>\n\n"
-        f"Номер: <b>#{booking_id}</b>\n"
-        f"Дата: <b>{html.escape(str(context.user_data.get('b_date')))}</b>\n"
-        f"Время: <b>{html.escape(str(context.user_data.get('b_time')))}</b>\n"
-        f"Гостей: <b>{html.escape(str(context.user_data.get('b_guests')))}</b>\n"
-        f"Имя: <b>{html.escape(str(context.user_data.get('b_name')))}</b>\n"
-        f"Телефон: <b>{html.escape(str(context.user_data.get('b_phone')))}</b>\n"
+    await update.message.reply_text(
+        f"✅ Бронь принята! Номер #{booking_id}",
+        reply_markup=back_home_kb(),
     )
-    if comment:
-        msg_user += f"Комментарий: <i>{html.escape(comment)}</i>\n"
 
-    await update.message.reply_text(msg_user, parse_mode=ParseMode.HTML, reply_markup=back_home_kb())
-
-    # уведомление персоналу
-    who = ""
-    if user and user.username:
-        who = f"@{user.username}"
-    elif user:
-        who = user.full_name
-    else:
-        who = "Неизвестно"
-
-    msg_staff = (
-        f"📌 <b>Новая бронь</b>\n\n"
-        f"Заявка: <b>#{booking_id}</b>\n"
-        f"Дата: <b>{html.escape(str(context.user_data.get('b_date')))}</b>\n"
-        f"Время: <b>{html.escape(str(context.user_data.get('b_time')))}</b>\n"
-        f"Гостей: <b>{html.escape(str(context.user_data.get('b_guests')))}</b>\n"
-        f"Имя: <b>{html.escape(str(context.user_data.get('b_name')))}</b>\n"
-        f"Телефон: <b>{html.escape(str(context.user_data.get('b_phone')))}</b>\n"
-        f"От: <b>{html.escape(who)}</b>"
+    ok = await notify_staff(
+        context,
+        f"📌 Новая бронь #{booking_id}\n"
+        f"Дата: {context.user_data.get('b_date')}\n"
+        f"Время: {context.user_data.get('b_time')}\n"
+        f"Гостей: {context.user_data.get('b_guests')}\n"
+        f"Имя: {context.user_data.get('b_name')}\n"
+        f"Телефон: {context.user_data.get('b_phone')}\n"
+        f"Комментарий: {comment or '-'}",
     )
-    if comment:
-        msg_staff += f"\nКомментарий: <i>{html.escape(comment)}</i>"
-
-    await notify_staff(context, msg_staff)
+    logger.info("Booking notify sent to %s chats", ok)
 
     for k in ["b_date", "b_time", "b_guests", "b_name", "b_phone"]:
         context.user_data.pop(k, None)
@@ -365,48 +354,28 @@ async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 # ==========================================================
-# 10) MINI APP → ПРИЁМ ПРЕДЗАКАЗА
+# 10) MINI APP → WEB_APP_DATA (ПРЕДЗАКАЗ)
 # ==========================================================
 async def webapp_order_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Ловит update.message.web_app_data (Mini App sendData()) и шлёт в группу заказов.
-    """
-
-    # 1) Забираем raw максимально надёжно (Telegram иногда по-разному кладёт message)
-    raw = None
-    if update.message and update.message.web_app_data:
-        raw = update.message.web_app_data.data
-    elif update.effective_message and update.effective_message.web_app_data:
-        raw = update.effective_message.web_app_data.data
-
-    if not raw:
+    if not update.message or not update.message.web_app_data:
         return
 
-    logger.info("📦 MINIAPP RAW DATA: %s", raw)
+    raw = update.message.web_app_data.data
+    logger.info("📦 WEB_APP_DATA RAW: %s", raw)
 
-    # 2) Парсим JSON
     try:
         data = json.loads(raw)
     except Exception as e:
         logger.exception("❌ JSON parse error: %s", e)
-        if update.effective_message:
-            await update.effective_message.reply_text("❌ Ошибка чтения заказа.")
+        await update.message.reply_text("❌ Ошибка чтения заказа (JSON).")
         return
 
     if data.get("type") != "preorder":
-        if update.effective_message:
-            await update.effective_message.reply_text("⚠️ Это не предзаказ.")
+        logger.info("⚠️ not preorder type: %s", data.get("type"))
         return
 
-    # 3) Собираем текст заказа
     user = update.effective_user
-    who = ""
-    if user and user.username:
-        who = f"@{user.username}"
-    elif user:
-        who = user.full_name
-    else:
-        who = "Неизвестно"
+    who = f"@{user.username}" if user and user.username else (user.full_name if user else "Неизвестно")
 
     phone = str(data.get("phone", "-"))
     desired_time = str(data.get("desired_time", "-"))
@@ -417,46 +386,31 @@ async def webapp_order_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     lines = []
     for it in items:
         try:
-            name = html.escape(str(it.get("name", "")))
-            qty = html.escape(str(it.get("qty", "")))
-            s = html.escape(str(it.get("sum", "")))
-            lines.append(f"• {name} × {qty} = {s} ₽")
+            lines.append(f"- {it.get('name')} × {it.get('qty')} = {it.get('sum')} ₽")
         except Exception:
-            continue
+            pass
 
-    if not lines:
-        lines = ["• (пусто)"]
-
-    text_html = (
-        "🛒 <b>НОВЫЙ ПРЕДЗАКАЗ (Mini App)</b>\n\n"
-        f"👤 От: <b>{html.escape(who)}</b>\n"
-        f"📞 Телефон: <b>{html.escape(phone)}</b>\n"
-        f"⏰ Время: <b>{html.escape(desired_time)}</b>\n\n"
+    text = (
+        "🛒 НОВЫЙ ПРЕДЗАКАЗ (Mini App)\n\n"
+        f"От: {who}\n"
+        f"Телефон: {phone}\n"
+        f"Время: {desired_time}\n\n"
         + "\n".join(lines) +
-        f"\n\n💰 <b>Итого:</b> {html.escape(str(total))} ₽"
+        f"\n\nИтого: {total} ₽"
     )
+    if comment:
+        text += f"\nКомментарий: {comment}"
 
-    if comment.strip():
-        text_html += f"\n\n💬 Комментарий: <i>{html.escape(comment.strip())}</i>"
+    ok = await notify_staff(context, text)
+    logger.info("Preorder notify sent to %s chats", ok)
 
-    # 4) Шлём в группы
-    sent, errors = await notify_staff(context, text_html)
-
-    # 5) Ответ пользователю
-    if update.effective_message:
-        if sent > 0:
-            await update.effective_message.reply_text("✅ Предзаказ принят! Мы скоро свяжемся.")
-        else:
-            # максимально полезно — показать причину
-            err_text = "\n".join(errors[:2]) if errors else "неизвестная ошибка"
-            await update.effective_message.reply_text(
-                "❌ Заказ дошёл до бота, но НЕ отправился в группу.\n\n"
-                "Проверь:\n"
-                "1) бот добавлен в группу заказов\n"
-                "2) бот может писать в группе (лучше сделать админом)\n"
-                "3) chat_id группы правильный (обычно -100...)\n\n"
-                f"Ошибка: {err_text}"
-            )
+    if ok > 0:
+        await update.message.reply_text("✅ Предзаказ принят! Мы скоро свяжемся.")
+    else:
+        await update.message.reply_text(
+            "❌ Заказ дошёл до бота, но НЕ отправился в группу.\n"
+            "Проверь: бот добавлен в группу, chat_id верный, нет ограничений на отправку."
+        )
 
 
 # ==========================================================
@@ -464,11 +418,6 @@ async def webapp_order_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 # ==========================================================
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.exception("Unhandled error: %s", context.error)
-    try:
-        if isinstance(update, Update) and update.effective_message:
-            await update.effective_message.reply_text("⚠️ Ошибка. Попробуй ещё раз или напиши администратору.")
-    except Exception:
-        pass
 
 
 # ==========================================================
@@ -482,6 +431,7 @@ def main() -> None:
     # commands
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("chatid", chatid_cmd))
+    app.add_handler(CommandHandler("testnotify", testnotify_cmd))
     app.add_handler(CommandHandler("cancel", cancel_cmd))
 
     # callbacks
@@ -506,14 +456,14 @@ def main() -> None:
     )
     app.add_handler(booking_conv)
 
-    # mini app orders (ОБЯЗАТЕЛЬНО)
+    # ✅ web app data handler
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, webapp_order_handler))
 
     # error handler
     app.add_error_handler(error_handler)
 
-    logger.info("🤖 Бот запущен (polling)")
-    app.run_polling(drop_pending_updates=True)
+    logger.info("🤖 Бот запущен")
+    app.run_polling()
 
 
 if __name__ == "__main__":
