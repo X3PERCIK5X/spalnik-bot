@@ -235,6 +235,20 @@ async def testnotify_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.message.reply_text(f"Результат: отправлено в {ok} чат(ов) из {len(NOTIFY_CHAT_IDS)}.")
 
 
+async def webappurl_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Диагностика: показать текущий WEBAPP_URL и кнопку WebApp."""
+    if not WEBAPP_URL:
+        await update.message.reply_text("WEBAPP_URL не задан.")
+        return
+    await update.message.reply_text(f"WEBAPP_URL: {WEBAPP_URL}")
+    await update.message.reply_text(
+        "Открыть Mini App:",
+        reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton("🛒 Mini App", web_app=WebAppInfo(url=WEBAPP_URL))]]
+        ),
+    )
+
+
 # ==========================================================
 # 8) CALLBACKS
 # ==========================================================
@@ -470,6 +484,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("chatid", chatid_cmd))
     app.add_handler(CommandHandler("testnotify", testnotify_cmd))
+    app.add_handler(CommandHandler("webappurl", webappurl_cmd))
     app.add_handler(CommandHandler("cancel", cancel_cmd))
 
     # callbacks
