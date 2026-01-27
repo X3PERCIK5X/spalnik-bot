@@ -465,6 +465,24 @@ async def webapp_order_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
 
+async def debug_all_updates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Диагностика: лог всех входящих апдейтов."""
+    try:
+        if update.message and update.message.web_app_data:
+            logger.info("✅ DEBUG: web_app_data received")
+        elif update.message:
+            logger.info("ℹ️ DEBUG: message chat=%s type=%s text=%s",
+                        update.effective_chat.id if update.effective_chat else None,
+                        update.effective_chat.type if update.effective_chat else None,
+                        update.message.text)
+        elif update.callback_query:
+            logger.info("ℹ️ DEBUG: callback %s", update.callback_query.data)
+        else:
+            logger.info("ℹ️ DEBUG: update %s", update)
+    except Exception as e:
+        logger.exception("❌ DEBUG handler error: %s", e)
+
+
 # ==========================================================
 # 11) GLOBAL ERROR HANDLER
 # ==========================================================
@@ -511,6 +529,8 @@ def main() -> None:
 
     # ✅ web app data handler (шире, чтобы не потерять апдейты)
     app.add_handler(MessageHandler(filters.ALL, webapp_order_handler))
+    # debug handler
+    app.add_handler(MessageHandler(filters.ALL, debug_all_updates))
 
     # error handler
     app.add_error_handler(error_handler)
