@@ -397,6 +397,7 @@ async def webapp_order_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     raw = update.message.web_app_data.data
     logger.info("📦 WEB_APP_DATA RAW: %s", raw)
+    logger.info("📦 WEB_APP_DATA LEN: %s", len(raw))
 
     try:
         data = json.loads(raw)
@@ -421,7 +422,13 @@ async def webapp_order_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     lines = []
     for it in items:
         try:
-            lines.append(f"- {it.get('name')} × {it.get('qty')} = {it.get('sum')} ₽")
+            name = it.get("name") or it.get("id") or "item"
+            qty = it.get("qty")
+            summ = it.get("sum")
+            if summ is not None:
+                lines.append(f"- {name} × {qty} = {summ} ₽")
+            else:
+                lines.append(f"- {name} × {qty}")
         except Exception:
             pass
 
