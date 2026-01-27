@@ -430,7 +430,20 @@ async def webapp_order_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     logger.info("Preorder notify sent to %s chats", ok)
 
     if ok > 0:
-        await update.message.reply_text("✅ Предзаказ принят! Мы скоро свяжемся.")
+        # Ответ в тот чат, где был открыт мини‑апп
+        try:
+            await update.message.reply_text("✅ Предзаказ принят! Мы скоро свяжемся.")
+        except Exception:
+            pass
+        # И отдельное подтверждение пользователю в личку (если доступно)
+        if user:
+            try:
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text="✅ Предзаказ принят! Мы скоро свяжемся.",
+                )
+            except Exception:
+                pass
     else:
         await update.message.reply_text(
             "❌ Заказ дошёл до бота, но НЕ отправился в группу.\n"
@@ -481,8 +494,8 @@ def main() -> None:
     )
     app.add_handler(booking_conv)
 
-    # ✅ web app data handler
-    app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, webapp_order_handler))
+    # ✅ web app data handler (шире, чтобы не потерять апдейты)
+    app.add_handler(MessageHandler(filters.ALL, webapp_order_handler))
 
     # error handler
     app.add_error_handler(error_handler)
