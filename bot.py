@@ -249,7 +249,7 @@ async def open_events_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await q.answer()
 
     if not EVENTS_FILE.exists():
-        await q.message.reply_text("🎉 Файла событий пока нет. Добавишь позже.", reply_markup=back_home_kb())
+        await q.message.reply_text("🎉 Пока пусто.", reply_markup=back_home_kb())
         return
 
     with EVENTS_FILE.open("rb") as f:
@@ -462,20 +462,9 @@ def main() -> None:
     # error handler
     app.add_error_handler(error_handler)
 
-    logger.info("🤖 Бот запущен (WEBHOOK)")
+    logger.info("🤖 Бот запущен (POLLING)")
+    app.run_polling()
 
-PORT = int(os.environ.get("PORT", "10000"))
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
-
-if not WEBHOOK_URL:
-    raise RuntimeError("❌ Не задан WEBHOOK_URL в переменных окружения Render")
-
-    app.run_webhook(
-    listen="0.0.0.0",
-    port=PORT,
-    url_path="webhook",
-    webhook_url=f"{WEBHOOK_URL}/webhook",
-)
 
 if __name__ == "__main__":
     main()
