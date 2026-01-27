@@ -91,7 +91,21 @@ TG_CHANNEL_URL = "https://t.me/SpalnikBar"
 TIP_URL = ""  # если пусто — будет “скоро здесь можно будет оставить чаевые”
 
 # ВАЖНО: сюда chat_id группы заказов
-NOTIFY_CHAT_IDS: list[int] = [-5102802574]
+def parse_chat_ids(raw: str) -> list[int]:
+    ids: list[int] = []
+    for part in raw.replace(";", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            ids.append(int(part))
+        except ValueError:
+            logger.warning("⚠️ Некорректный chat_id в NOTIFY_CHAT_IDS: %s", part)
+    return ids
+
+
+ENV_NOTIFY_CHAT_IDS = os.getenv("NOTIFY_CHAT_IDS", "").strip()
+NOTIFY_CHAT_IDS: list[int] = parse_chat_ids(ENV_NOTIFY_CHAT_IDS) if ENV_NOTIFY_CHAT_IDS else [-5102802574]
 
 
 # ==========================================================
@@ -184,10 +198,17 @@ async def show_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         pass
 
 
-async def notify_staff(context: ContextTypes.DEFAULT_TYPE, text: str) -> int:
+async def notify_staff(
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+    extra_chat_ids: list[int] | None = None,
+) -> int:
     """Шлёт в группу(ы). Возвращает сколько чатов успешно отправлено."""
     ok = 0
-    for cid in NOTIFY_CHAT_IDS:
+    target_ids = set(NOTIFY_CHAT_IDS)
+    if extra_chat_ids:
+        target_ids.update(extra_chat_ids)
+    for cid in target_ids:
         try:
             # ⚠️ без ParseMode, чтобы спецсимволы не ломали отправку
             await context.bot.send_message(chat_id=cid, text=text)
@@ -401,7 +422,11 @@ async def webapp_order_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     if comment:
         text += f"\nКомментарий: {comment}"
 
-    ok = await notify_staff(context, text)
+    source_chat_id = None
+    if update.effective_chat and update.effective_chat.type in ("group", "supergroup"):
+        source_chat_id = update.effective_chat.id
+
+    ok = await notify_staff(context, text, extra_chat_ids=[source_chat_id] if source_chat_id else None)
     logger.info("Preorder notify sent to %s chats", ok)
 
     if ok > 0:
