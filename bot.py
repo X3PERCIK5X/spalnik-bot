@@ -214,6 +214,9 @@ async def notify_staff(
 def _parse_booking_datetime(date_str: str, time_str: str) -> datetime | None:
     d = date_str.strip().lower()
     t = time_str.strip()
+    # allow "HH.MM" format
+    if ":" not in t and "." in t:
+        t = t.replace(".", ":", 1)
     if not d or not t:
         return None
 
@@ -674,7 +677,10 @@ def main() -> None:
     app.add_error_handler(error_handler)
 
     # reminders job (every minute)
-    app.job_queue.run_repeating(reminders_job, interval=60, first=10)
+    if app.job_queue:
+        app.job_queue.run_repeating(reminders_job, interval=60, first=10)
+    else:
+        logger.warning("JobQueue не настроен. Установи python-telegram-bot[job-queue].")
 
     logger.info("🤖 Бот запущен (POLLING)")
     app.run_polling()
