@@ -392,6 +392,21 @@ async def webapp_order_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     comment = str(data.get("comment", "") or "")
     total = data.get("total", 0)
     items = data.get("items", []) or []
+    tg = data.get("tg") or {}
+    tg_line = ""
+    if isinstance(tg, dict) and tg:
+        tg_user = tg.get("username") or ""
+        tg_name = " ".join([str(tg.get("first_name") or ""), str(tg.get("last_name") or "")]).strip()
+        tg_id = tg.get("id")
+        parts = []
+        if tg_name:
+            parts.append(tg_name)
+        if tg_user:
+            parts.append(f"@{tg_user}")
+        if tg_id:
+            parts.append(f"id:{tg_id}")
+        if parts:
+            tg_line = "Telegram: " + ", ".join(parts) + "\n"
 
     lines = []
     for it in items:
@@ -409,6 +424,7 @@ async def webapp_order_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     text = (
         "🛒 НОВЫЙ ПРЕДЗАКАЗ (Mini App)\n\n"
         f"От: {who}\n"
+        f"{tg_line}"
         f"Телефон: {phone}\n"
         f"Время: {desired_time}\n\n"
         + "\n".join(lines) +
