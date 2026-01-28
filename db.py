@@ -19,6 +19,16 @@ def init_db(schema_path: str) -> None:
 
     with _connect() as conn:
         conn.executescript(sql)
+        # add missing columns for existing DBs
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(bookings)").fetchall()}
+        if "reminder_sent" not in cols:
+            conn.execute("ALTER TABLE bookings ADD COLUMN reminder_sent INTEGER NOT NULL DEFAULT 0")
+        if "reminder_sent_at" not in cols:
+            conn.execute("ALTER TABLE bookings ADD COLUMN reminder_sent_at TEXT")
+        if "canceled" not in cols:
+            conn.execute("ALTER TABLE bookings ADD COLUMN canceled INTEGER NOT NULL DEFAULT 0")
+        if "canceled_at" not in cols:
+            conn.execute("ALTER TABLE bookings ADD COLUMN canceled_at TEXT")
         conn.commit()
 
 
@@ -42,3 +52,39 @@ def create_booking(
         )
         conn.commit()
         return int(cur.lastrowid)
+
+
+def list_pending_bookings() -> list[sqlite3.Row]:
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            SELECT * FROM bookings
+            WHERE canceled = 0 AND reminder_sent = 0
+            ORDER BY id DESC
+            """
+        )
+        return cur.fetchall()
+
+
+def mark_reminder_sent(booking_id: int) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE bookings SET reminder_sent = 1, reminder_sent_at = datetime('now') WHERE id = ?",
+            (booking_id,),
+        )
+        conn.commit()
+
+
+def mark_canceled(booking_id: int) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE bookings SET canceled = 1, canceled_at = datetime('now') WHERE id = ?",
+            (booking_id,),
+        )
+        conn.commit()
+
+
+def get_booking(booking_id: int) -> Optional[sqlite3.Row]:
+    with _connect() as conn:
+        cur = conn.execute("SELECT * FROM bookings WHERE id = ?", (booking_id,))
+        return cur.fetchone()

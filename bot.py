@@ -6,6 +6,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 from telegram import (
@@ -25,7 +27,7 @@ from telegram.ext import (
     filters,
 )
 
-from db import init_db, create_booking
+from db import init_db, create_booking, list_pending_bookings, mark_reminder_sent, mark_canceled, get_booking
 
 
 # ==========================================================
@@ -112,6 +114,8 @@ NOTIFY_CHAT_IDS: list[int] = parse_chat_ids(ENV_NOTIFY_CHAT_IDS) if ENV_NOTIFY_C
 # 4) BOOKING STATES
 # ==========================================================
 B_DATE, B_TIME, B_GUESTS, B_NAME, B_PHONE, B_COMMENT = range(6)
+
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
 # ==========================================================
@@ -205,6 +209,118 @@ async def notify_staff(
         except Exception as e:
             logger.exception("❌ Не смог отправить в чат %s: %s", cid, e)
     return ok
+
+
+def _parse_booking_datetime(date_str: str, time_str: str) -> datetime | None:
+    d = date_str.strip().lower()
+    t = time_str.strip()
+    if not d or not t:
+        return None
+
+    # time: HH:MM
+    try:
+        hh, mm = t.split(":", 1)
+        hour = int(hh)
+        minute = int(mm)
+    except Exception:
+        return None
+
+    # date: DD.MM[.YYYY] or DD/MM[/YYYY] or "26 января"
+    months = {
+        "январ": 1,
+        "феврал": 2,
+        "март": 3,
+        "апрел": 4,
+        "ма": 5,
+        "июн": 6,
+        "июл": 7,
+        "август": 8,
+        "сентябр": 9,
+        "октябр": 10,
+        "ноябр": 11,
+        "декабр": 12,
+    }
+
+    day = month = year = None
+
+    if "." in d or "/" in d:
+        sep = "." if "." in d else "/"
+        parts = d.split(sep)
+        try:
+            day = int(parts[0])
+            month = int(parts[1])
+            year = int(parts[2]) if len(parts) > 2 and parts[2] else None
+        except Exception:
+            return None
+    else:
+        # format: "26 января"
+        parts = d.split()
+        if len(parts) >= 2:
+            try:
+                day = int(parts[0])
+            except Exception:
+                return None
+            for key, val in months.items():
+                if parts[1].startswith(key):
+                    month = val
+                    break
+
+    if not day or not month:
+        return None
+
+    now = datetime.now(MOSCOW_TZ)
+    if year is None:
+        year = now.year
+    try:
+        dt = datetime(year, month, day, hour, minute, tzinfo=MOSCOW_TZ)
+    except Exception:
+        return None
+
+    # if date already passed and year was implicit, push to next year
+    if dt < now and (str(year) == str(now.year)) and ("." in d or "/" in d or " " in d):
+        try:
+            dt = datetime(year + 1, month, day, hour, minute, tzinfo=MOSCOW_TZ)
+        except Exception:
+            pass
+
+    return dt
+
+
+async def send_booking_reminder(context: ContextTypes.DEFAULT_TYPE, booking: dict) -> None:
+    tg_user_id = booking.get("tg_user_id")
+    if not tg_user_id:
+        return
+    booking_id = booking.get("id")
+    text = (
+        "⏰ Напоминание о брони\n\n"
+        f"Имя: {booking.get('name')}\n"
+        f"Телефон: {booking.get('phone')}\n"
+        f"Дата: {booking.get('date')}\n"
+        f"Время: {booking.get('time')}\n"
+        f"Гостей: {booking.get('guests')}\n\n"
+        "Если ваши планы изменились — нажмите кнопку ниже."
+    )
+    kb = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Отменить бронь", callback_data=f"cancel_booking:{booking_id}")]]
+    )
+    try:
+        await context.bot.send_message(chat_id=int(tg_user_id), text=text, reply_markup=kb)
+    except Exception:
+        pass
+
+
+async def reminders_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    now = datetime.now(MOSCOW_TZ)
+    upcoming = list_pending_bookings()
+    for row in upcoming:
+        booking = dict(row)
+        dt = _parse_booking_datetime(str(booking.get("date", "")), str(booking.get("time", "")))
+        if not dt:
+            continue
+        delta = (dt - now).total_seconds()
+        if 0 < delta <= 3600:
+            await send_booking_reminder(context, booking)
+            mark_reminder_sent(int(booking["id"]))
 
 
 # ==========================================================
@@ -378,6 +494,22 @@ async def webapp_order_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("❌ Ошибка чтения заказа (JSON).")
         return
 
+    if data.get("type") == "booking":
+        user = update.effective_user
+        booking_id = create_booking(
+            tg_user_id=user.id if user else None,
+            tg_username=user.username if user else None,
+            date=str(data.get("date", "")),
+            time=str(data.get("time", "")),
+            guests=int(data.get("guests") or 1),
+            name=str(data.get("name", "")),
+            phone=str(data.get("phone", "")),
+            comment=str(data.get("comment", "")),
+        )
+
+        await update.message.reply_text(f"✅ Бронь принята! Номер #{booking_id}")
+        return
+
     if data.get("type") != "preorder":
         logger.info("⚠️ not preorder type: %s", data.get("type"))
         return
@@ -469,6 +601,40 @@ async def debug_all_updates(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         logger.exception("❌ DEBUG handler error: %s", e)
 
 
+async def cancel_booking_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    await q.answer()
+    data = q.data or ""
+    if not data.startswith("cancel_booking:"):
+        return
+    try:
+        booking_id = int(data.split(":", 1)[1])
+    except Exception:
+        return
+
+    booking = get_booking(booking_id)
+    if not booking:
+        await q.message.reply_text("Бронь не найдена.")
+        return
+
+    mark_canceled(booking_id)
+    await q.message.reply_text("✅ Бронь отменена.")
+
+    lines = [
+        "❌ Отмена брони",
+        "",
+        f"Имя: {booking['name']}",
+        f"Телефон: {booking['phone']}",
+        f"Дата: {booking['date']}",
+        f"Время: {booking['time']}",
+        f"Гостей: {booking['guests']}",
+    ]
+    if booking["tg_username"]:
+        lines.append(f"Telegram: @{booking['tg_username']}")
+    text = "\n".join(lines)
+    await notify_staff(context, text)
+
+
 # ==========================================================
 # 11) GLOBAL ERROR HANDLER
 # ==========================================================
@@ -494,6 +660,7 @@ def main() -> None:
     # callbacks
     app.add_handler(CallbackQueryHandler(go_home_cb, pattern="^go_home$"))
     app.add_handler(CallbackQueryHandler(open_events_cb, pattern="^open_events$"))
+    app.add_handler(CallbackQueryHandler(cancel_booking_cb, pattern="^cancel_booking:"))
 
     # booking conversation
     # booking conversation removed (бронь в мини-аппе)
@@ -505,6 +672,9 @@ def main() -> None:
 
     # error handler
     app.add_error_handler(error_handler)
+
+    # reminders job (every minute)
+    app.job_queue.run_repeating(reminders_job, interval=60, first=10)
 
     logger.info("🤖 Бот запущен (POLLING)")
     app.run_polling()
