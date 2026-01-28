@@ -154,15 +154,35 @@ def back_home_kb() -> InlineKeyboardMarkup:
 # ==========================================================
 # 6) HELPERS
 # ==========================================================
-async def show_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.effective_chat.id
+async def track_bot_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int) -> None:
+    context.chat_data.setdefault("bot_message_ids", [])
+    ids = context.chat_data["bot_message_ids"]
+    if message_id not in ids:
+        ids.append(message_id)
 
-    old_home = context.chat_data.get("home_message_id")
-    if isinstance(old_home, int):
+
+async def delete_bot_messages(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
+    ids = context.chat_data.get("bot_message_ids", [])
+    if not ids:
+        return
+    for mid in ids:
         try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=old_home)
+            await context.bot.delete_message(chat_id=chat_id, message_id=mid)
         except Exception:
             pass
+    context.chat_data["bot_message_ids"] = []
+
+
+async def send_and_replace(context: ContextTypes.DEFAULT_TYPE, chat_id: int, *args, **kwargs):
+    await delete_bot_messages(context, chat_id)
+    msg = await context.bot.send_message(chat_id=chat_id, *args, **kwargs)
+    await track_bot_message(context, chat_id, msg.message_id)
+    return msg
+
+
+async def show_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    await delete_bot_messages(context, chat_id)
 
     if LOGO_PATH.exists():
         with LOGO_PATH.open("rb") as f:
@@ -181,7 +201,7 @@ async def show_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             reply_markup=main_keyboard(),
         )
 
-    context.chat_data["home_message_id"] = msg.message_id
+    await track_bot_message(context, chat_id, msg.message_id)
 
     try:
         await context.bot.pin_chat_message(chat_id=chat_id, message_id=msg.message_id, disable_notification=True)
@@ -229,10 +249,12 @@ async def testnotify_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def webappurl_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Диагностика: показать текущий WEBAPP_URL и кнопку WebApp."""
     if not WEBAPP_URL:
-        await update.message.reply_text("WEBAPP_URL не задан.")
+        await send_and_replace(context, update.effective_chat.id, "WEBAPP_URL не задан.")
         return
-    await update.message.reply_text(f"WEBAPP_URL: {WEBAPP_URL}")
-    await update.message.reply_text(
+    await send_and_replace(context, update.effective_chat.id, f"WEBAPP_URL: {WEBAPP_URL}")
+    await send_and_replace(
+        context,
+        update.effective_chat.id,
         "Открыть Mini App:",
         reply_markup=InlineKeyboardMarkup(
             [[InlineKeyboardButton("🛒 Mini App", web_app=WebAppInfo(url=WEBAPP_URL))]]
@@ -259,11 +281,18 @@ async def open_events_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await q.answer()
 
     if not EVENTS_FILE.exists():
-        await q.message.reply_text("🎉 Пока пусто.", reply_markup=back_home_kb())
+        await send_and_replace(context, update.effective_chat.id, "🎉 Пока пусто.", reply_markup=back_home_kb())
         return
 
     with EVENTS_FILE.open("rb") as f:
-        await q.message.reply_document(document=f, filename=EVENTS_FILE.name, reply_markup=back_home_kb())
+        await delete_bot_messages(context, update.effective_chat.id)
+        msg = await context.bot.send_document(
+            chat_id=update.effective_chat.id,
+            document=f,
+            filename=EVENTS_FILE.name,
+            reply_markup=back_home_kb(),
+        )
+        await track_bot_message(context, update.effective_chat.id, msg.message_id)
 
 
 # ==========================================================
@@ -272,19 +301,34 @@ async def open_events_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def booking_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     q = update.callback_query
     await q.answer()
-    await q.message.reply_text("📅 Напиши дату (например: 26.01 или 26 января):", reply_markup=back_home_kb())
+    await send_and_replace(
+        context,
+        update.effective_chat.id,
+        "📅 Напиши дату (например: 26.01 или 26 января):",
+        reply_markup=back_home_kb(),
+    )
     return B_DATE
 
 
 async def b_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["b_date"] = update.message.text.strip()
-    await update.message.reply_text("⏰ Время (например: 19:30):", reply_markup=back_home_kb())
+    await send_and_replace(
+        context,
+        update.effective_chat.id,
+        "⏰ Время (например: 19:30):",
+        reply_markup=back_home_kb(),
+    )
     return B_TIME
 
 
 async def b_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["b_time"] = update.message.text.strip()
-    await update.message.reply_text("👥 Количество гостей числом (1–50):", reply_markup=back_home_kb())
+    await send_and_replace(
+        context,
+        update.effective_chat.id,
+        "👥 Количество гостей числом (1–50):",
+        reply_markup=back_home_kb(),
+    )
     return B_GUESTS
 
 
@@ -295,17 +339,32 @@ async def b_guests(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         if not (1 <= guests <= 50):
             raise ValueError
     except ValueError:
-        await update.message.reply_text("Напиши число от 1 до 50.", reply_markup=back_home_kb())
+        await send_and_replace(
+            context,
+            update.effective_chat.id,
+            "Напиши число от 1 до 50.",
+            reply_markup=back_home_kb(),
+        )
         return B_GUESTS
 
     context.user_data["b_guests"] = guests
-    await update.message.reply_text("👤 На какое имя бронируем?", reply_markup=back_home_kb())
+    await send_and_replace(
+        context,
+        update.effective_chat.id,
+        "👤 На какое имя бронируем?",
+        reply_markup=back_home_kb(),
+    )
     return B_NAME
 
 
 async def b_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["b_name"] = update.message.text.strip()
-    await update.message.reply_text("📞 Телефон для связи:", reply_markup=back_home_kb())
+    await send_and_replace(
+        context,
+        update.effective_chat.id,
+        "📞 Телефон для связи:",
+        reply_markup=back_home_kb(),
+    )
     return B_PHONE
 
 
@@ -332,7 +391,9 @@ async def finalize_booking(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         comment="",
     )
 
-    await update.message.reply_text(
+    await send_and_replace(
+        context,
+        update.effective_chat.id,
         f"✅ Бронь принята! Номер #{booking_id}",
         reply_markup=back_home_kb(),
     )
@@ -358,7 +419,7 @@ async def finalize_booking(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
     if update.message:
-        await update.message.reply_text("Ок, отменил.", reply_markup=back_home_kb())
+        await send_and_replace(context, update.effective_chat.id, "Ок, отменил.", reply_markup=back_home_kb())
     return ConversationHandler.END
 
 
