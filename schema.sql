@@ -10,9 +10,5 @@ CREATE TABLE IF NOT EXISTS bookings (
   guests INTEGER NOT NULL,
   name TEXT NOT NULL,
   phone TEXT NOT NULL,
-  comment TEXT,
-  reminder_sent INTEGER NOT NULL DEFAULT 0,
-  reminder_sent_at TEXT,
-  canceled INTEGER NOT NULL DEFAULT 0,
-  canceled_at TEXT
+  comment TEXT
 );
