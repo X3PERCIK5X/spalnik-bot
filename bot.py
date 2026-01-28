@@ -123,13 +123,11 @@ HOME_TEXT = "🍻 *Спальник Бар*\n\nВыбирай действие �
 def main_keyboard() -> InlineKeyboardMarkup:
     tips_btn = InlineKeyboardButton("💜 Чаевые", url=TIP_URL)
 
-    rows = [
-        [InlineKeyboardButton("📅 Бронь столов", callback_data="book_start")],
-    ]
+    rows = []
 
     # ✅ ВАЖНО: мини-апп должен открываться как WebApp, иначе web_app_data не придёт
     if WEBAPP_URL:
-        rows.append([InlineKeyboardButton("Меню/Самовывоз", web_app=WebAppInfo(url=WEBAPP_URL))])
+        rows.append([InlineKeyboardButton("Меню/Забронировать стол", web_app=WebAppInfo(url=WEBAPP_URL))])
 
     rows += [
         [
@@ -498,19 +496,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(open_events_cb, pattern="^open_events$"))
 
     # booking conversation
-    booking_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(booking_entry, pattern="^book_start$")],
-        states={
-            B_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, b_date)],
-            B_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, b_time)],
-            B_GUESTS: [MessageHandler(filters.TEXT & ~filters.COMMAND, b_guests)],
-            B_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, b_name)],
-            B_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, b_phone)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_cmd)],
-        allow_reentry=True,
-    )
-    app.add_handler(booking_conv)
+    # booking conversation removed (бронь в мини-аппе)
 
     # ✅ web app data handler (шире, чтобы не потерять апдейты)
     app.add_handler(MessageHandler(filters.ALL, webapp_order_handler))
