@@ -396,17 +396,8 @@ async def webapp_order_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     tg_line = ""
     if isinstance(tg, dict) and tg:
         tg_user = tg.get("username") or ""
-        tg_name = " ".join([str(tg.get("first_name") or ""), str(tg.get("last_name") or "")]).strip()
-        tg_id = tg.get("id")
-        parts = []
-        if tg_name:
-            parts.append(tg_name)
         if tg_user:
-            parts.append(f"@{tg_user}")
-        if tg_id:
-            parts.append(f"id:{tg_id}")
-        if parts:
-            tg_line = "Telegram: " + ", ".join(parts) + "\n"
+            tg_line = f"Telegram: @{tg_user}\n"
 
     lines = []
     for it in items:
