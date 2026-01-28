@@ -88,7 +88,7 @@ GIS2_REVIEWS_URL = "https://2gis.ru/moscow/firm/70000001053915498"
 YANDEX_FOOD_URL = "https://eda.yandex.ru/r/spal_nik?placeSlug=spalnik"
 TG_CHANNEL_URL = "https://t.me/SpalnikBar"
 
-TIP_URL = ""  # если пусто — будет “скоро здесь можно будет оставить чаевые”
+TIP_URL = "https://netmonet.co/qr/244255/tip?o=4"
 
 # ВАЖНО: сюда chat_id группы заказов
 def parse_chat_ids(raw: str) -> list[int]:
@@ -121,17 +121,17 @@ HOME_TEXT = "🍻 *Спальник Бар*\n\nВыбирай действие �
 
 
 def main_keyboard() -> InlineKeyboardMarkup:
-    tips_btn = (
-        InlineKeyboardButton("💜 Чаевые", url=TIP_URL)
-        if TIP_URL
-        else InlineKeyboardButton("💜 Чаевые", callback_data="tips")
-    )
+    tips_btn = InlineKeyboardButton("💜 Чаевые", url=TIP_URL)
 
     rows = [
-        [
-            InlineKeyboardButton("📋 Меню (PDF)", callback_data="open_menu"),
-            InlineKeyboardButton("🎉 События", callback_data="open_events"),
-        ],
+        [InlineKeyboardButton("📅 Бронь столов", callback_data="book_start")],
+    ]
+
+    # ✅ ВАЖНО: мини-апп должен открываться как WebApp, иначе web_app_data не придёт
+    if WEBAPP_URL:
+        rows.append([InlineKeyboardButton("Меню/Самовывоз", web_app=WebAppInfo(url=WEBAPP_URL))])
+
+    rows += [
         [
             InlineKeyboardButton("⭐ (Яндекс)", url=YANDEX_REVIEWS_URL),
             InlineKeyboardButton("⭐ (2ГИС)", url=GIS2_REVIEWS_URL),
@@ -140,18 +140,9 @@ def main_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("📣 Наш канал", url=TG_CHANNEL_URL),
             InlineKeyboardButton("🛵 Яндекс Еда", url=YANDEX_FOOD_URL),
         ],
-        [
-            InlineKeyboardButton("📅 Бронь столов", callback_data="book_start"),
-            tips_btn,
-        ],
+        [InlineKeyboardButton("🎉 События", callback_data="open_events")],
+        [tips_btn],
     ]
-
-    # ✅ ВАЖНО: мини-апп должен открываться как WebApp, иначе web_app_data не придёт
-    if WEBAPP_URL:
-        rows.insert(
-            0,
-            [InlineKeyboardButton("🛒 Меню / Предзаказ (Mini App)", web_app=WebAppInfo(url=WEBAPP_URL))],
-        )
 
     return InlineKeyboardMarkup(rows)
 
@@ -259,24 +250,8 @@ async def go_home_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await show_home(update, context)
 
 
-async def tips_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.callback_query.answer()
-    await update.callback_query.message.reply_text(
-        "💜 Скоро здесь можно будет оставить чаевые.",
-        reply_markup=back_home_kb(),
-    )
-
-
 async def open_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    q = update.callback_query
-    await q.answer()
-
-    if not MENU_FILE.exists():
-        await q.message.reply_text("Файл меню не найден 🙁 Проверь `assets/menu.pdf`.", reply_markup=back_home_kb())
-        return
-
-    with MENU_FILE.open("rb") as f:
-        await q.message.reply_document(document=f, filename=MENU_FILE.name, reply_markup=back_home_kb())
+    return
 
 
 async def open_events_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -336,15 +311,14 @@ async def b_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def b_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["b_phone"] = update.message.text.strip()
-    await update.message.reply_text("💬 Комментарий (необязательно). Если нет — напиши: -", reply_markup=back_home_kb())
-    return B_COMMENT
+    return await finalize_booking(update, context)
 
 
 async def b_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    comment = update.message.text.strip()
-    if comment == "-":
-        comment = ""
+    return ConversationHandler.END
 
+
+async def finalize_booking(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.effective_user
 
     booking_id = create_booking(
@@ -355,7 +329,7 @@ async def b_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         guests=int(context.user_data.get("b_guests", 1)),
         name=str(context.user_data.get("b_name", "")),
         phone=str(context.user_data.get("b_phone", "")),
-        comment=comment,
+        comment="",
     )
 
     await update.message.reply_text(
@@ -371,7 +345,7 @@ async def b_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         f"Гостей: {context.user_data.get('b_guests')}\n"
         f"Имя: {context.user_data.get('b_name')}\n"
         f"Телефон: {context.user_data.get('b_phone')}\n"
-        f"Комментарий: {comment or '-'}",
+        f"Комментарий: -",
     )
     logger.info("Booking notify sent to %s chats", ok)
 
@@ -514,9 +488,7 @@ def main() -> None:
 
     # callbacks
     app.add_handler(CallbackQueryHandler(go_home_cb, pattern="^go_home$"))
-    app.add_handler(CallbackQueryHandler(open_menu_cb, pattern="^open_menu$"))
     app.add_handler(CallbackQueryHandler(open_events_cb, pattern="^open_events$"))
-    app.add_handler(CallbackQueryHandler(tips_cb, pattern="^tips$"))
 
     # booking conversation
     booking_conv = ConversationHandler(
@@ -527,7 +499,6 @@ def main() -> None:
             B_GUESTS: [MessageHandler(filters.TEXT & ~filters.COMMAND, b_guests)],
             B_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, b_name)],
             B_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, b_phone)],
-            B_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, b_comment)],
         },
         fallbacks=[CommandHandler("cancel", cancel_cmd)],
         allow_reentry=True,
