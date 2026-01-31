@@ -141,7 +141,6 @@ def main_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🛵 Яндекс Еда", url=YANDEX_FOOD_URL),
         ],
         [InlineKeyboardButton("Система лояльности", url=LOYALTY_URL)],
-        [InlineKeyboardButton("🎉 События", callback_data="open_events")],
         [tips_btn],
     ]
 
