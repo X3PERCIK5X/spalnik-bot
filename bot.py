@@ -87,6 +87,7 @@ YANDEX_REVIEWS_URL = "https://yandex.ru/maps/org/spalnik/104151350821/reviews/?l
 GIS2_REVIEWS_URL = "https://2gis.ru/moscow/firm/70000001053915498"
 YANDEX_FOOD_URL = "https://eda.yandex.ru/r/spal_nik?placeSlug=spalnik"
 TG_CHANNEL_URL = "https://t.me/SpalnikBar"
+LOYALTY_URL = "https://spalnik.wallet.open-s.info/"
 
 TIP_URL = "https://netmonet.co/qr/244255/tip?o=4"
 
@@ -139,6 +140,7 @@ def main_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("📣 Наш канал", url=TG_CHANNEL_URL),
             InlineKeyboardButton("🛵 Яндекс Еда", url=YANDEX_FOOD_URL),
         ],
+        [InlineKeyboardButton("Система лояльности", url=LOYALTY_URL)],
         [InlineKeyboardButton("🎉 События", callback_data="open_events")],
         [tips_btn],
     ]
